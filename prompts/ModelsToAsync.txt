@@ -1,0 +1,207 @@
+
+1. Simply add async before function keyword and await before async function call.
+2. Leave the callback function as it is.
+3. Add await before the function call which is returning a promise.
+4. Add async before the function keyword which is returning a promise.
+5. All Redis calls need to be awaited.
+6. All Sequelize calls need to be awaited.
+7. Leave everything else as it is.
+
+Original
+
+index_rides: function(req, res, next) {
+        var loopexit = 0;
+        async.whilst(
+            function() {
+                return loopexit != 1; // Check condition for exiting loop
+            },
+            function(callback) {
+                redis.get("index_ride_cnt", function(err, data) {
+                    if (!data) {
+                        data = 0;
+                    }
+
+                    models.replica_db.ride_detail.findAll({
+
+                        logging: false,
+                        where: { id: { [Sequelize.Op.gt]: data } },
+                        limit: 10,
+                        order: [['id']],
+                        attributes: { exclude: ["route_lat_long"] },
+                        include: [
+                            {
+                                model: models.appointment, required: false,
+                                attributes: ["source_address", "dest_address", "source_lat_long", "dest_lat_long", "appointment_status", "division_id", "created_by_user", "appointment_start_date_time", "created_by_patient", "createdAt", "updatedAt", "file_no", "appt_completion_time"]
+                            },
+                            {
+                                model: models.patient, required: false,
+                                attributes: ["first_name", "last_name", "phone", "org_id", "full_name"],
+                                include: [
+                                    {
+                                        model: models.user, required: false, attributes: ["username", "first_name", "last_name", "role", "org_id", "phone", "settings", "full_name"]
+                                    }
+                                ]
+                            },
+                            {
+                                model: models.organisation, required: false,
+                                attributes: ["name", "main_contact_id"]
+                            },
+                            {
+                                model: models.receipt,
+                                attributes: ["receipt_no", "receipt_image", "ride_cost", "distance", "distance_units", "currency_code", "surge_amount", "base_fare_amount", "duration", "surge_name", "distance_fare", "time_fare", "product_name", "promotion_amount", "booking_fee", "rounding_down", "minimum_amount", "fare_breakdown", "start_time", "end_time", "occm_fee_type", "occm_fee", "final_ride_cost"],
+                                required: false
+                            }
+                        ]
+                    }).then(function(result) {
+                        if (result.length > 0) {
+                            var elindex = [];
+                            var rideid = 0;
+                            async.each(result, function(rw, cb) {
+                                console.log("Indexing ride id - " + rw.id);
+                                elindex.push({ index: { _index: 'rides', _type: 'ride_details', _id: rw.id } });
+                                var ride_data = JSON.parse(JSON.stringify(rw));
+                                if(ride_data.receipt) {
+                                    // Add distance,distance units & cost to main ride data
+                                    ride_data.distance_number = parseFloat(ride_data.receipt.distance || "0");
+                                    ride_data.distance_units = ride_data.receipt.distance_units && ride_data.receipt.distance_units.toLowerCase() == "kilometers" ? 1 : 0; // 0 for miles, 1 for kilometers
+                                    ride_data.ride_cost = ride_data.receipt.ride_cost ? parseFloat(ride_data.receipt.ride_cost) : 0;
+                                    ride_data.final_ride_cost = ride_data.receipt.final_ride_cost ? parseFloat(ride_data.receipt.final_ride_cost) : 0;
+
+                                    if(ride_data.receipt.fare_breakdown){
+                                      ride_data.receipt.fare_breakdown = {
+                                        fareBreakdownStringify: JSON.stringify(ride_data.receipt.fare_breakdown)
+                                      }
+                                    }
+                                }
+                                var datat = convert_fields(ride_data);
+                                elindex.push(datat);
+                                rideid = rw.id;
+                                cb();
+                            }, function() {
+                                // console.log(elindex);
+                                elClient.bulk({
+                                    body: elindex
+                                }, function(er, resp) {
+                                    console.log(JSON.stringify(resp));
+                                    redis.set("index_ride_cnt", rideid, function() {})
+                                    redis.expire("index_ride_cnt", 300);
+                                    // loopexit = 1; //test purpose
+                                    callback(null, 0);
+                                });
+                            });
+                        } else {
+                            loopexit = 1;
+                            callback(null, 1); // Exit loop now
+                        }
+                    });
+                });
+            },
+            function(err, n) {
+                // 5 seconds have passed, n = 5
+                res.status(200).json({ 'done': 'done' });
+            }
+        );
+    }
+
+
+
+New:
+
+index_rides: async function(req, res, next) {
+        var loopexit = 0;
+        await async.whilst(
+            function() {
+                return loopexit != 1; // Check condition for exiting loop
+            },
+            async function (callback) {
+              await redis.get("index_ride_cnt", async function (err, data) {
+                if (!data) {
+                  data = 0;
+                }
+
+                await models.replica_db.ride_detail.findAll({
+
+                  logging: false,
+                  where: {id: {[Sequelize.Op.gt]: data}},
+                  limit: 10,
+                  order: [['id']],
+                  attributes: {exclude: ["route_lat_long"]},
+                  include: [
+                    {
+                      model: models.appointment, required: false,
+                      attributes: ["source_address", "dest_address", "source_lat_long", "dest_lat_long", "appointment_status", "division_id", "created_by_user", "appointment_start_date_time", "created_by_patient", "createdAt", "updatedAt", "file_no", "appt_completion_time"]
+                    },
+                    {
+                      model: models.patient, required: false,
+                      attributes: ["first_name", "last_name", "phone", "org_id", "full_name"],
+                      include: [
+                        {
+                          model: models.user,
+                          required: false,
+                          attributes: ["username", "first_name", "last_name", "role", "org_id", "phone", "settings", "full_name"]
+                        }
+                      ]
+                    },
+                    {
+                      model: models.organisation, required: false,
+                      attributes: ["name", "main_contact_id"]
+                    },
+                    {
+                      model: models.receipt,
+                      attributes: ["receipt_no", "receipt_image", "ride_cost", "distance", "distance_units", "currency_code", "surge_amount", "base_fare_amount", "duration", "surge_name", "distance_fare", "time_fare", "product_name", "promotion_amount", "booking_fee", "rounding_down", "minimum_amount", "fare_breakdown", "start_time", "end_time", "occm_fee_type", "occm_fee", "final_ride_cost"],
+                      required: false
+                    }
+                  ]
+                }).then(async function (result) {
+                  if (result.length > 0) {
+                    var elindex = [];
+                    var rideid = 0;
+                    await async.each(result, function (rw, cb) {
+                      console.log("Indexing ride id - " + rw.id);
+                      elindex.push({index: {_index: 'rides', _type: 'ride_details', _id: rw.id}});
+                      var ride_data = JSON.parse(JSON.stringify(rw));
+                      if (ride_data.receipt) {
+                        // Add distance,distance units & cost to main ride data
+                        ride_data.distance_number = parseFloat(ride_data.receipt.distance || "0");
+                        ride_data.distance_units = ride_data.receipt.distance_units && ride_data.receipt.distance_units.toLowerCase() == "kilometers" ? 1 : 0; // 0 for miles, 1 for kilometers
+                        ride_data.ride_cost = ride_data.receipt.ride_cost ? parseFloat(ride_data.receipt.ride_cost) : 0;
+                        ride_data.final_ride_cost = ride_data.receipt.final_ride_cost ? parseFloat(ride_data.receipt.final_ride_cost) : 0;
+
+                        if (ride_data.receipt.fare_breakdown) {
+                          ride_data.receipt.fare_breakdown = {
+                            fareBreakdownStringify: JSON.stringify(ride_data.receipt.fare_breakdown)
+                          }
+                        }
+                      }
+                      var datat = convert_fields(ride_data);
+                      elindex.push(datat);
+                      rideid = rw.id;
+                      cb();
+                    }, async function () {
+                      // console.log(elindex);
+                      await elClient.bulk({
+                        body: elindex
+                      }, async function (er, resp) {
+                        console.log(JSON.stringify(resp));
+                        await redis.set("index_ride_cnt", rideid, function () {
+                        })
+                        await redis.expire("index_ride_cnt", 300);
+                        // loopexit = 1; //test purpose
+                        callback(null, 0);
+                      });
+                    });
+                  } else {
+                    loopexit = 1;
+                    callback(null, 1); // Exit loop now
+                  }
+                });
+              });
+            },
+            function(err, n) {
+                // 5 seconds have passed, n = 5
+                res.status(200).json({ 'done': 'done' });
+            }
+        );
+    }
+
+
